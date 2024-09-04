@@ -33,9 +33,12 @@ func NewCommandError(err error, exitCode int) CommandError {
 
 type Start struct {
 	BrokerURL    string  `help:"MQTT server url (mqtt://foo.bar:1883)" short:"b" env:"ACCU_MQTT_BROKER"`
+	BrokerUser   string  `help:"MQTT server user" short:"u" env:"ACCU_MQTT_USER"`
+	BrokerPass   string  `help:"MQTT server password" short:"p" env:"ACCU_MQTT_PASSWORD"`
 	AccuAPIToken string  `help:"Accu Weather API app token" short:"t" env:"ACCU_MQTT_API_TOKEN"`
 	Latitude     float32 `help:"Latitude of location with up to 3 digit precision, e.g. -120.223" short:"x" env:"ACCU_MQTT_LATITUDE"`
 	Longitude    float32 `help:"Longitude of location with up to 3 digit precision, e.g. -120.223" short:"y" env:"ACCU_MQTT_LONGITUDE"`
+	Language     string  `help:"language of Accu Weather API respone" short:"l" env:"ACCU_MQTT_LANGUAGE"`	
 	UseTestData  bool    `help:"Use sample ./response.json instead of real API (for testing)" short:"d" env:"ACCU_MQTT_TEST_DATA" default:"false"`
 }
 
@@ -59,12 +62,12 @@ func main() {
 	}
 }
 
-func (c *cli) RefreshCast(apiKey, loc string) {
+func (c *cli) RefreshCast(apiKey, loc, lang string) {
 	if c.Start.UseTestData {
 		return
 	}
 	for range time.NewTicker(time.Minute * 80).C {
-		cast, err := queryAPI(c.httpClient, apiKey, loc)
+		cast, err := queryAPI(c.httpClient, apiKey, loc, lang)
 		if err != nil {
 			log.Warn().Err(err)
 		}
@@ -72,7 +75,7 @@ func (c *cli) RefreshCast(apiKey, loc string) {
 	}
 }
 
-func queryAPI(httpClient http.Client, apiKey, loc string) (MinuteCast, error) {
+func queryAPI(httpClient http.Client, apiKey, loc, lang string) (MinuteCast, error) {
 	res, err := httpClient.Get(fmt.Sprintf("https://dataservice.accuweather.com/forecasts/v1/minute?q=%s&apikey=%s", loc, apiKey))
 	if err != nil {
 		log.Warn().Err(err)
@@ -107,6 +110,8 @@ func queryAPI(httpClient http.Client, apiKey, loc string) (MinuteCast, error) {
 func (s *Start) Run(c cli) error {
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(s.BrokerURL)
+	opts.SetUsername(s.BrokerUser)
+	opts.SetPassword(s.BrokerPass)
 	opts.SetClientID("accu-mqtt")
 	opts.SetCleanSession(true)
 	opts.SetStore(mqtt.NewMemoryStore())
@@ -133,15 +138,20 @@ func (s *Start) Run(c cli) error {
 
 	loc := fmt.Sprintf("%.3f,%.3f", s.Latitude, s.Longitude)
 	apiKey := s.AccuAPIToken
-
+	lang := s.Language
+	if lang == "" {
+		lang = "en-us"
+	}
+	fmt.Printf("Set language to: %s\n", lang)
+	
 	cast, err := c.loadCast()
 	if cast.UpdateTime.Before(time.Now().Add(time.Minute * 80)) {
-		cast, err = queryAPI(c.httpClient, apiKey, loc)
+		cast, err = queryAPI(c.httpClient, apiKey, loc, lang)
 		if err != nil {
 			log.Warn().Err(err)
 		}
 	}
-	go c.RefreshCast(apiKey, loc)
+	go c.RefreshCast(apiKey, loc, lang)
 
 	if err != nil {
 		fmt.Println("Failed to retrieve MinuteCast: ", err)
